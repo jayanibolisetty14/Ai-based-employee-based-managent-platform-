@@ -18,3 +18,5 @@ bun.lock
 /.parcel-cache/
 /.turbo/
 public/avatars/
+__pycache__/
+venv/
