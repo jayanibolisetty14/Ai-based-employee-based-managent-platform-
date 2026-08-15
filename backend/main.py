@@ -5,6 +5,7 @@ from app.routes import journal
 from app.routes import mood
 from app.routes import report
 from app.routes import profile
+from app.routes import spotify
 
 app = FastAPI()
 
@@ -13,6 +14,7 @@ app.include_router(journal.router)
 app.include_router(mood.router)
 app.include_router(report.router)
 app.include_router(profile.router)
+app.include_router(spotify.router)
 
 @app.get("/")
 def home():
