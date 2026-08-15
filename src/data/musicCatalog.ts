@@ -8,6 +8,7 @@ export interface Song {
   duration: string;
   coverUrl: string;
   audioUrl: string;
+  spotifyUrl?: string;
   favorite?: boolean;
 }
 

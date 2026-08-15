@@ -4,6 +4,24 @@ import { useWellness } from './WellnessContext';
 
 export type PlayerState = 'idle' | 'loading' | 'playing' | 'paused' | 'buffering' | 'completed' | 'error';
 
+interface SpotifyArtist {
+  name: string;
+}
+
+interface SpotifyTrack {
+  name: string;
+  artists: SpotifyArtist[];
+  external_urls?: {
+    spotify?: string;
+  };
+}
+
+interface SpotifySearchResponse {
+  tracks?: {
+    items?: SpotifyTrack[];
+  };
+}
+
 interface MusicContextType {
   songs: Song[];
   currentSong: Song | null;
@@ -37,6 +55,9 @@ interface MusicContextType {
 
 const MusicContext = createContext<MusicContextType | undefined>(undefined);
 
+// Reference to maintain a single dedicated Spotify tab across song plays
+let spotifyWindow: Window | null = null;
+
 export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { userData, updateMusicStats } = useWellness();
 
@@ -52,7 +73,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [duration, setDuration] = useState<number>(0);
   const [volume, setVolumeState] = useState<number>(0.8);
   const [queue, setQueue] = useState<Song[]>([]);
-  
+
   const [recentlyPlayed, setRecentlyPlayed] = useState<Song[]>(() => {
     const recentIds = userData.musicStats?.recentlyPlayed || [];
     return recentIds.map(id => MUSIC_CATALOG.find(s => s.id === id)).filter(Boolean) as Song[];
@@ -63,13 +84,11 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [selectedMood, setSelectedMood] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-
   const queueRef = useRef<Song[]>([]);
   const selectedLanguageRef = useRef<string>('All');
   const currentSongRef = useRef<Song | null>(null);
   const songsRef = useRef<Song[]>([]);
-  
+
   useEffect(() => {
     queueRef.current = queue;
   }, [queue]);
@@ -86,76 +105,6 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     songsRef.current = songs;
   }, [songs]);
 
-  // Initialize audio element once
-  useEffect(() => {
-    const audio = new Audio();
-    audio.volume = volume;
-    audioRef.current = audio;
-
-    const handleTimeUpdate = () => {
-      setCurrentTime(audio.currentTime);
-      if (audio.duration && !isNaN(audio.duration)) {
-        setDuration(audio.duration);
-      }
-    };
-
-    const handleEnded = () => {
-      setPlayerState('completed');
-      setIsPlaying(false);
-      // Auto play next in queue or mood list
-      if (queueRef.current.length > 0) {
-        const next = queueRef.current[0];
-        setQueue(q => q.slice(1));
-        playSong(next);
-      } else {
-        // Play next matching song in current filter
-        const list = songsRef.current.filter(s => selectedLanguageRef.current === 'All' || s.language === selectedLanguageRef.current);
-        if (list.length > 0) {
-          const currentIndex = currentSongRef.current ? list.findIndex(s => s.id === currentSongRef.current!.id) : -1;
-          const nextIndex = (currentIndex + 1) % list.length;
-          playSong(list[nextIndex]);
-        }
-      }
-    };
-
-    const handleError = () => {
-      setPlayerState('error');
-      setIsPlaying(false);
-      const audio = audioRef.current;
-      if (audio && audio.error && (audio.error.code === 3 || audio.error.code === 4)) {
-        setErrorMsg("Audio unavailable. This track doesn't have a playable audio source yet.");
-      } else {
-        setErrorMsg('Unable to play this track right now. Try Again');
-      }
-    };
-
-    const handleWaiting = () => {
-      setPlayerState('buffering');
-    };
-
-    const handlePlaying = () => {
-      setPlayerState('playing');
-      setIsPlaying(true);
-      setErrorMsg(null);
-    };
-
-    audio.addEventListener('timeupdate', handleTimeUpdate);
-    audio.addEventListener('ended', handleEnded);
-    audio.addEventListener('error', handleError);
-    audio.addEventListener('waiting', handleWaiting);
-    audio.addEventListener('playing', handlePlaying);
-
-    return () => {
-      audio.pause();
-      audio.removeEventListener('timeupdate', handleTimeUpdate);
-      audio.removeEventListener('ended', handleEnded);
-      audio.removeEventListener('error', handleError);
-      audio.removeEventListener('waiting', handleWaiting);
-      audio.removeEventListener('playing', handlePlaying);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   // Save favorites
   useEffect(() => {
     const favIds = songs.filter(s => s.favorite).map(s => s.id);
@@ -170,34 +119,103 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recentlyPlayed]);
 
-  const playSong = (song: Song) => {
-    if (!audioRef.current) return;
-    
-    // Stop previous track, reset to 0
-    audioRef.current.pause();
-    audioRef.current.currentTime = 0;
-    setCurrentTime(0);
-    setCurrentSong(song);
-    setPlayerState('loading');
-    setErrorMsg(null);
+  const normalize = (text: string): string => {
+    return text.trim().toLowerCase();
+  };
 
-    audioRef.current.src = song.audioUrl;
-    audioRef.current.load();
-
-    audioRef.current.play().then(() => {
-      setIsPlaying(true);
-      setPlayerState('playing');
-      // Add to recently played (avoid duplicates at the top)
-      setRecentlyPlayed(prev => [song, ...prev.filter(s => s.id !== song.id)]);
-    }).catch((err) => {
-      setPlayerState('error');
-      setIsPlaying(false);
-      if (err.name === 'NotSupportedError') {
-        setErrorMsg("Audio unavailable. This track doesn't have a playable audio source yet.");
+  /**
+   * Opens or redirects a single dedicated Spotify window/tab.
+   * Uses a named target window ('MoodMentorSpotifyPlayer') and window reference.
+   * Note: 'noopener' is omitted here because browsers deliberately sever the JS window
+   * reference when 'noopener' is present, preventing tab re-use.
+   */
+  const openOrFocusSpotifyTab = (url: string) => {
+    try {
+      if (spotifyWindow && !spotifyWindow.closed) {
+        spotifyWindow.location.href = url;
+        spotifyWindow.focus();
       } else {
-        setErrorMsg('Unable to play this track right now. Try Again');
+        spotifyWindow = window.open(url, 'MoodMentorSpotifyPlayer');
       }
+    } catch {
+      // Fallback if cross-origin access blocks location modification
+      spotifyWindow = window.open(url, 'MoodMentorSpotifyPlayer');
+    }
+  };
+
+  const openSpotifySearchFallback = (song: Song) => {
+    const fallbackQuery = encodeURIComponent(`${song.title} ${song.artist}`);
+    openOrFocusSpotifyTab(`https://open.spotify.com/search/${fallbackQuery}`);
+  };
+
+  const findBestTrackMatch = (tracks: SpotifyTrack[], song: Song): SpotifyTrack | null => {
+    const targetTitle = normalize(song.title);
+    const targetArtist = normalize(song.artist);
+
+    // Pass 1: Strict match — Exact Title AND Exact Artist
+    const exactMatch = tracks.find(track => {
+      const trackTitle = normalize(track.name);
+      const hasArtistMatch = track.artists?.some(a => normalize(a.name) === targetArtist);
+      return trackTitle === targetTitle && hasArtistMatch;
     });
+
+    if (exactMatch) return exactMatch;
+
+    // Pass 2: Partial/Normalized match — Substring Title match AND Exact Artist
+    const partialMatch = tracks.find(track => {
+      const trackTitle = normalize(track.name);
+      const hasArtistMatch = track.artists?.some(a => normalize(a.name) === targetArtist);
+      const isTitleRelated = trackTitle.includes(targetTitle) || targetTitle.includes(trackTitle);
+      return isTitleRelated && hasArtistMatch;
+    });
+
+    return partialMatch || null;
+  };
+
+  const openSpotify = async (song: Song) => {
+    try {
+      const titleQuery = encodeURIComponent(song.title);
+      const artistQuery = encodeURIComponent(song.artist);
+
+      const response = await fetch(
+        `http://127.0.0.1:8000/spotify/search?q=${titleQuery}&artist=${artistQuery}&limit=10`
+      );
+
+      if (!response.ok) {
+        throw new Error('Spotify search failed');
+      }
+
+      const data: SpotifySearchResponse = await response.json();
+      const tracks = data.tracks?.items || [];
+
+      const matchedTrack = findBestTrackMatch(tracks, song);
+
+      if (matchedTrack?.external_urls?.spotify) {
+        openOrFocusSpotifyTab(matchedTrack.external_urls.spotify);
+        return;
+      }
+
+      // No reliable match found — fallback to search query
+      openSpotifySearchFallback(song);
+    } catch (error) {
+      console.error('Spotify search error, opening fallback search page:', error);
+      openSpotifySearchFallback(song);
+    }
+  };
+
+  const playSong = (song: Song) => {
+    setCurrentSong(song);
+    setPlayerState('idle');
+    setIsPlaying(false);
+    setErrorMsg(null);
+    setCurrentTime(0);
+
+    openSpotify(song);
+
+    setRecentlyPlayed(prev => [
+      song,
+      ...prev.filter(s => s.id !== song.id)
+    ]);
   };
 
   const retryPlayback = () => {
@@ -207,43 +225,20 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const togglePlayPause = () => {
-    if (!audioRef.current || !currentSong) return;
-
-    if (isPlaying) {
-      audioRef.current.pause();
-      setIsPlaying(false);
-      setPlayerState('paused');
-    } else {
-      audioRef.current.play().then(() => {
-        setIsPlaying(true);
-        setPlayerState('playing');
-        setErrorMsg(null);
-      }).catch((err) => {
-        setPlayerState('error');
-        if (err.name === 'NotSupportedError') {
-          setErrorMsg("Audio unavailable. This track doesn't have a playable audio source yet.");
-        } else {
-          setErrorMsg('Unable to play this track right now. Try Again');
-        }
-      });
-    }
+    if (!currentSong) return;
+    openSpotify(currentSong);
   };
 
   const seekTo = (time: number) => {
-    if (!audioRef.current) return;
-    audioRef.current.currentTime = time;
     setCurrentTime(time);
   };
 
   const setVolume = (vol: number) => {
     setVolumeState(vol);
-    if (audioRef.current) {
-      audioRef.current.volume = vol;
-    }
   };
 
   const toggleFavorite = (songId: string) => {
-    setSongs(prev => prev.map(s => s.id === songId ? { ...s, favorite: !s.favorite } : s));
+    setSongs(prev => prev.map(s => (s.id === songId ? { ...s, favorite: !s.favorite } : s)));
   };
 
   const addToQueue = (song: Song) => {
@@ -252,6 +247,14 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const playNextInQueue = (song: Song) => {
     setQueue(prev => [song, ...prev]);
+  };
+
+  const playNextDefault = () => {
+    const list = songs.filter(s => selectedLanguage === 'All' || s.language === selectedLanguage);
+    if (list.length === 0) return;
+    const currentIndex = currentSong ? list.findIndex(s => s.id === currentSong.id) : -1;
+    const nextIndex = (currentIndex + 1) % list.length;
+    playSong(list[nextIndex]);
   };
 
   const nextSong = () => {
@@ -265,11 +268,6 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   const previousSong = () => {
-    if (currentTime > 3 && audioRef.current) {
-      audioRef.current.currentTime = 0;
-      return;
-    }
-    // Play previous from recently played or catalog
     if (recentlyPlayed.length > 1 && currentSong) {
       const currentIndex = recentlyPlayed.findIndex(s => s.id === currentSong.id);
       if (currentIndex !== -1 && currentIndex + 1 < recentlyPlayed.length) {
@@ -277,26 +275,12 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         return;
       }
     }
-    // Fallback to first song in catalog
     if (songs.length > 0) {
       playSong(songs[0]);
     }
   };
 
-  const playNextDefault = () => {
-    const list = songs.filter(s => selectedLanguage === 'All' || s.language === selectedLanguage);
-    if (list.length === 0) return;
-    const currentIndex = currentSong ? list.findIndex(s => s.id === currentSong.id) : -1;
-    const nextIndex = (currentIndex + 1) % list.length;
-    playSong(list[nextIndex]);
-  };
-
   const stopPlayback = () => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current.currentTime = 0;
-      audioRef.current.src = '';
-    }
     setIsPlaying(false);
     setPlayerState('idle');
     setCurrentSong(null);
@@ -309,36 +293,38 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   };
 
   return (
-    <MusicContext.Provider value={{
-      songs,
-      currentSong,
-      isPlaying,
-      playerState,
-      currentTime,
-      duration,
-      volume,
-      queue,
-      recentlyPlayed,
-      errorMsg,
-      playSong,
-      togglePlayPause,
-      nextSong,
-      previousSong,
-      seekTo,
-      setVolume,
-      toggleFavorite,
-      addToQueue,
-      playNextInQueue,
-      retryPlayback,
-      stopPlayback,
-      closePlayer,
-      selectedLanguage,
-      setSelectedLanguage,
-      selectedMood,
-      setSelectedMood,
-      searchQuery,
-      setSearchQuery
-    }}>
+    <MusicContext.Provider
+      value={{
+        songs,
+        currentSong,
+        isPlaying,
+        playerState,
+        currentTime,
+        duration,
+        volume,
+        queue,
+        recentlyPlayed,
+        errorMsg,
+        playSong,
+        togglePlayPause,
+        nextSong,
+        previousSong,
+        seekTo,
+        setVolume,
+        toggleFavorite,
+        addToQueue,
+        playNextInQueue,
+        retryPlayback,
+        stopPlayback,
+        closePlayer,
+        selectedLanguage,
+        setSelectedLanguage,
+        selectedMood,
+        setSelectedMood,
+        searchQuery,
+        setSearchQuery
+      }}
+    >
       {children}
     </MusicContext.Provider>
   );

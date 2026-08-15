@@ -140,10 +140,38 @@ def devices():
     return resp.json()
 
 
+# @router.get("/search")
+# def search(q: str, limit: int = 20, market: str = "US"):
+#     # Can use app token for public search, or user token for personalized results
+#     token = None
+#     try:
+#         token = get_app_token()
+#     except Exception:
+#         tokens = _load_tokens()
+#         token = tokens.get("user_access_token")
+
+#     if not token:
+#         raise HTTPException(status_code=400, detail="No token available for search")
+
+#     url = "https://api.spotify.com/v1/search"
+#     params = {"q": q, "type": "track", "limit": limit, "market": market}
+#     headers = {"Authorization": f"Bearer {token}"}
+#     resp = requests.get(url, params=params, headers=headers)
+
+#     if resp.status_code != 200:
+#         raise HTTPException(status_code=502, detail=f"Spotify search failed: {resp.text}")
+
+#     return resp.json()
+
 @router.get("/search")
-def search(q: str, limit: int = 20, market: str = "US"):
-    # Can use app token for public search, or user token for personalized results
+def search(
+    q: str,
+    artist: str = "",
+    limit: int = 10,
+    market: str = "US"
+):
     token = None
+
     try:
         token = get_app_token()
     except Exception:
@@ -151,18 +179,43 @@ def search(q: str, limit: int = 20, market: str = "US"):
         token = tokens.get("user_access_token")
 
     if not token:
-        raise HTTPException(status_code=400, detail="No token available for search")
+        raise HTTPException(
+            status_code=400,
+            detail="No token available for search"
+        )
+
+    # Search track and artist separately for better matching
+    if artist:
+        search_query = f'track:"{q}" artist:"{artist}"'
+    else:
+        search_query = f'track:"{q}"'
 
     url = "https://api.spotify.com/v1/search"
-    params = {"q": q, "type": "track", "limit": limit, "market": market}
-    headers = {"Authorization": f"Bearer {token}"}
-    resp = requests.get(url, params=params, headers=headers)
+
+    params = {
+        "q": search_query,
+        "type": "track",
+        "limit": limit,
+        "market": market
+    }
+
+    headers = {
+        "Authorization": f"Bearer {token}"
+    }
+
+    resp = requests.get(
+        url,
+        params=params,
+        headers=headers
+    )
 
     if resp.status_code != 200:
-        raise HTTPException(status_code=502, detail=f"Spotify search failed: {resp.text}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Spotify search failed: {resp.text}"
+        )
 
     return resp.json()
-
 
 @router.get("/tokens")
 def tokens():
