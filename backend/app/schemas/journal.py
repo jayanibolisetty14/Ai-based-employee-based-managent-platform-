@@ -7,9 +7,9 @@ class JournalCreate(BaseModel):
     employee_id: str
     title: str
     content: str
-    emotion: str
-    confidence: float
-    wellness_category: str
+    emotion: Optional[str] = None
+    confidence: Optional[float] = None
+    wellness_category: Optional[str] = None
 
 
 class JournalResponse(BaseModel):
