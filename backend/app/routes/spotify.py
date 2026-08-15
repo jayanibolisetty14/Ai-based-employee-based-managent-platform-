@@ -123,6 +123,47 @@ def recommendations(seed_genres: str = "pop", limit: int = 12):
     return resp.json()
 
 
+@router.get("/devices")
+def devices():
+    tokens = _load_tokens()
+    access = tokens.get("user_access_token")
+    if not access:
+        raise HTTPException(status_code=400, detail="No user access token. Authorize via /spotify/auth_url first.")
+
+    url = "https://api.spotify.com/v1/me/player/devices"
+    headers = {"Authorization": f"Bearer {access}"}
+    resp = requests.get(url, headers=headers)
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch devices: {resp.text}")
+
+    return resp.json()
+
+
+@router.get("/search")
+def search(q: str, limit: int = 20, market: str = "US"):
+    # Can use app token for public search, or user token for personalized results
+    token = None
+    try:
+        token = get_app_token()
+    except Exception:
+        tokens = _load_tokens()
+        token = tokens.get("user_access_token")
+
+    if not token:
+        raise HTTPException(status_code=400, detail="No token available for search")
+
+    url = "https://api.spotify.com/v1/search"
+    params = {"q": q, "type": "track", "limit": limit, "market": market}
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = requests.get(url, params=params, headers=headers)
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Spotify search failed: {resp.text}")
+
+    return resp.json()
+
+
 @router.get("/tokens")
 def tokens():
     return _load_tokens()

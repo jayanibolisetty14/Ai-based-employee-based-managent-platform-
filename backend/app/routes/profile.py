@@ -45,3 +45,12 @@ async def update_profile(employee_id: str, profile: dict):
     return {
         "message": "Profile updated successfully."
     }
+
+
+@router.get("/")
+async def list_profiles():
+    profiles = []
+    for p in profile_collection.find():
+        p["_id"] = str(p["_id"])
+        profiles.append(p)
+    return profiles
