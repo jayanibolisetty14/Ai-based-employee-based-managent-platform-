@@ -1,0 +1,6 @@
+{
+  "name": "Mood Mentor AI",
+  "description": "A high-fidelity wellness and mental health tracking application with AI-powered insights and cinematic design.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
