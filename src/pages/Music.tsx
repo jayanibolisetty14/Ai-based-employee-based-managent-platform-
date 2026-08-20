@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useMusic } from '@/context/MusicContext';
 import { useWellness } from '@/context/WellnessContext';
 import { GlassCard } from '@/components/common/GlassCard';
@@ -44,7 +44,9 @@ export default function Music() {
     setSelectedMood,
     searchQuery,
     setSearchQuery,
-    recentlyPlayed
+    recentlyPlayed,
+    groqSongs,
+    loadGroqRecommendations
   } = useMusic();
 
   const { userData } = useWellness();
@@ -64,15 +66,46 @@ export default function Music() {
   const latestMood = userData.moodHistory[userData.moodHistory.length - 1]?.mood;
 
   // Recommended songs based on latest mood or default Calm
-  const recommendedSongs = useMemo(() => {
-    let targetMood = 'Calm';
-    if (latestMood === 'Stressed' || latestMood === 'Anxious' || latestMood === 'Frustrated') targetMood = 'Calm';
-    else if (latestMood === 'Happy' || latestMood === 'Excited') targetMood = 'Happy';
-    else if (latestMood === 'Tired') targetMood = 'Energetic';
-    else if (latestMood === 'Sad') targetMood = 'Relaxed';
+  // const recommendedSongs = useMemo(() => {
+  //   let targetMood = 'Calm';
+  //   if (latestMood === 'Stressed' || latestMood === 'Anxious' || latestMood === 'Frustrated') targetMood = 'Calm';
+  //   else if (latestMood === 'Happy' || latestMood === 'Excited') targetMood = 'Happy';
+  //   else if (latestMood === 'Tired') targetMood = 'Energetic';
+  //   else if (latestMood === 'Sad') targetMood = 'Relaxed';
     
-    return songs.filter(s => s.mood === targetMood).slice(0, 6);
-  }, [songs, latestMood]);
+  //   return songs.filter(s => s.mood === targetMood).slice(0, 6);
+  // }, [songs, latestMood]);
+  const targetMood = useMemo(() => {
+  if (latestMood === 'Stressed' || latestMood === 'Anxious' || latestMood === 'Frustrated') {
+    return 'Calm';
+  }
+
+  if (latestMood === 'Happy' || latestMood === 'Excited') {
+    return 'Happy';
+  }
+
+  if (latestMood === 'Tired') {
+    return 'Energetic';
+  }
+
+  if (latestMood === 'Sad') {
+    return 'Relaxed';
+  }
+
+  return 'Calm';
+}, [latestMood]);
+
+useEffect(() => {
+  loadGroqRecommendations(targetMood);
+}, [targetMood]);
+
+const recommendedSongs = useMemo(() => {
+  if (groqSongs.length > 0) {
+    return groqSongs;
+  }
+
+  return songs.filter(s => s.mood === targetMood).slice(0, 6);
+}, [groqSongs, songs, targetMood]);
 
   // Filtered song catalog
   const filteredSongs = useMemo(() => {

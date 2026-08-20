@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { Song, MUSIC_CATALOG } from '../data/musicCatalog';
 import { useWellness } from './WellnessContext';
+import { getGroqRecommendations } from '../lib/groqApi';
 
 export type PlayerState = 'idle' | 'loading' | 'playing' | 'paused' | 'buffering' | 'completed' | 'error';
 
@@ -51,6 +52,8 @@ interface MusicContextType {
   setSelectedMood: (mood: string) => void;
   searchQuery: string;
   setSearchQuery: (q: string) => void;
+  groqSongs: Song[];
+  loadGroqRecommendations: (mood: string) => Promise<void>;
 }
 
 const MusicContext = createContext<MusicContextType | undefined>(undefined);
@@ -83,6 +86,7 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const [selectedLanguage, setSelectedLanguage] = useState<string>('All');
   const [selectedMood, setSelectedMood] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [groqSongs, setGroqSongs] = useState<Song[]>([]);
 
   const queueRef = useRef<Song[]>([]);
   const selectedLanguageRef = useRef<string>('All');
@@ -142,6 +146,51 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       spotifyWindow = window.open(url, 'MoodMentorSpotifyPlayer');
     }
   };
+
+  const loadGroqRecommendations = async (mood: string) => {
+  try {
+    const data = await getGroqRecommendations(mood, 5);
+
+    const lines = data.recommendations
+      .split('\n')
+      .map((line: string) => line.trim())
+      .filter((line: string) => line);
+
+    const recommendedSongs: Song[] = lines.map(
+      (line: string, index: number) => {
+        const cleaned = line.replace(/^\d+\.\s*/, '');
+        const parts = cleaned.split(' - ');
+
+        const title = parts[0]?.trim() || cleaned;
+        const artist = parts.slice(1).join(' - ').trim() || 'Unknown Artist';
+
+        return {
+          id: `groq-${Date.now()}-${index}`,
+          title,
+          artist,
+          album: 'Groq AI Recommendation',
+          language: 'English',
+          mood: mood as Song['mood'],
+          duration: '0:00',
+          coverUrl:
+            'https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?w=400&q=80',
+          audioUrl: '',
+          spotifyUrl: `https://open.spotify.com/search/${encodeURIComponent(
+            `${title} ${artist}`
+          )}`,
+          favorite: false
+        };
+      }
+    );
+
+    setGroqSongs(recommendedSongs);
+  } catch (error) {
+    console.error('Groq recommendations error:', error);
+    setGroqSongs([]);
+  }
+};
+
+
 
   const openSpotifySearchFallback = (song: Song) => {
     const fallbackQuery = encodeURIComponent(`${song.title} ${song.artist}`);
@@ -322,7 +371,9 @@ export const MusicProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         selectedMood,
         setSelectedMood,
         searchQuery,
-        setSearchQuery
+        setSearchQuery,
+        groqSongs,
+        loadGroqRecommendations
       }}
     >
       {children}
